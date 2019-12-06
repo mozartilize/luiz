@@ -63,7 +63,12 @@ func main() {
 	})
 	e.GET("/slack/login", login)
 	e.GET("/slack/auth", auth)
-	e.Logger.Fatal(e.Start("0.0.0.0:1323"))
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "1323"
+	}
+	e.Logger.Fatal(e.Start(":" + port))
 }
 
 func login(c echo.Context) error {
