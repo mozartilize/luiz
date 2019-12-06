@@ -83,14 +83,22 @@ func login(c echo.Context) error {
 	sess, _ := session.Get("session", c)
 
 	sess.Values["slack:state"] = params.Get("state")
-	fmt.Println(params.Get("state"))
+	log.Info(params.Get("state"))
 	sess.Values["slack:redirect_uri"] = params.Get("redirect_uri")
 	sess.Save(c.Request(), c.Response())
-	c.Response().Header().Set("Cache-Control", "no-cache")
+	c.Response().Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 	return c.Redirect(http.StatusMovedPermanently, baseURL.String())
 }
 
 func auth(c echo.Context) error {
+	c.Response().Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+
+	authError := c.QueryParam("error")
+
+	if authError != "" {
+		return c.String(http.StatusUnauthorized, "Unauthorized")
+	}
+
 	state := c.QueryParam("state")
 	sess, _ := session.Get("session", c)
 	sessionState, _ := sess.Values["slack:state"]
@@ -98,13 +106,8 @@ func auth(c echo.Context) error {
 		sessionState = ""
 	}
 	if state != sessionState {
+		log.Error(state + " " + sessionState.(string))
 		return c.String(http.StatusConflict, "State does not match")
-	}
-
-	authError := c.QueryParam("error")
-
-	if authError != "" {
-		return c.String(http.StatusUnauthorized, "Unauthorized")
 	}
 
 	redirectURI, _ := sess.Values["slack:redirect_uri"]
@@ -115,6 +118,9 @@ func auth(c echo.Context) error {
 	clientID := os.Getenv("SLACK_CLIENT_ID")
 	clientSecret := os.Getenv("SLACK_CLIENT_SECRET")
 	code := c.QueryParam("code")
+	if code == "" {
+		return c.String(http.StatusUnauthorized, "Unauthorized")
+	}
 
 	if resp, err := http.PostForm("https://slack.com/api/oauth.access", url.Values{
 		"client_id":     []string{clientID},
@@ -147,6 +153,5 @@ func auth(c echo.Context) error {
 		fmt.Println(err)
 		return c.String(http.StatusUnauthorized, "Unauthorized")
 	}
-
 	return c.String(http.StatusOK, "OK!")
 }
