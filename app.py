@@ -165,7 +165,7 @@ async def message(**payload):
         attachments = data['message']['attachments']
         is_nsfw = False
         async with httpx.Client(headers={
-            'apikey': os.getenv("VISION_API_KEY")
+            'apikey': os.getenv("VISION_APIKEY")
         }) as requests:
             for att in attachments:
                 url = att.get('thumb_url') or att.get('image_url')
