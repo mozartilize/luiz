@@ -7,13 +7,32 @@ import ssl as ssl_lib
 import certifi
 import slack
 import httpx
+from sqlalchemy import create_engine
+from sqlalchemy.sql import table, select, literal_column, bindparam
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    pass
+else:
+    load_dotenv()
 
 attachment_message = {}
 
 users_info = {}
 
-access_token = 'xoxp-624137142464-612712054882-832198144609-' \
-               '67532ce4e3fe5d99c570cc4eeb70811d'
+
+db = create_engine(os.environ["DATABASE_URL"], pool_recycle=600)
+
+
+def get_access_token(team_id):
+    sql = select([literal_column("access_token")])\
+        .select_from(table("tokens"))\
+        .where(literal_column("team_id") == bindparam("team_id"))\
+        .order_by(literal_column("timestamp").desc()).limit(1)
+    with db.engine.connect() as conn:
+        row = conn.execute(sql, team_id=team_id).fetchone()
+    return row.access_token
 
 
 async def get_userinfo(web_client, user_id):
@@ -46,40 +65,38 @@ def is_file_message(data):
             yield ('image', *info)
         elif 'video/' in filedata['mimetype']:
             yield ('video', *info)
+    yield from ()  # return empty generator if not match any
 
 
-async def delete_nsfw_and_clone_it_to_thread(
-    web_client, channel, user_id, text, ts, files=None
-):
-    user = await get_userinfo(web_client, user_id)
-    async with httpx.AsyncClient(headers={
-        'Authorization': 'Bearer %s' % (access_token)
+async def delete_nsfw_and_clone_it_to_thread(web_client, info, payload):
+    user = await get_userinfo(web_client, info["user_id"])
+    async with httpx.Client(headers={
+        'Authorization': 'Bearer %s' % (info["access_token"])
     }) as requests:
         delete_resp = await requests.post(  # noqa
             'https://slack.com/api/chat.delete',
             params=dict(
-                channel=channel,
-                ts=ts,
+                channel=info["channel"],
+                ts=payload["ts"],
             )
         )
         msg = await web_client.chat_postMessage(
-            channel=channel,
+            channel=info["channel"],
             text='This message has been hidden')
+        files = payload.get("files")
+        text = payload["text"]
         text2 = ''
         if files:
             if any(finfo[3] > 15 * 1024 * 1024 for finfo in files.values()):
                 for finfo in files.values():
                     if text != '':
                         text += '\n'
-                    text += '<%s|%s>' % (
-                        finfo[1],
-                        finfo[-3]
-                    )
+                    text += '<%s|%s>' % (finfo[1], finfo[-3])
                 if text != '':
                     text += '\n'
-                text += '\n<@%s> Please copy and paste the links above to ' \
+                text += '\n<@%s> Please copy and paste the link(s) above to ' \
                     'this thread if you want to reshare. ' \
-                    'Sorry for inconvenience.' % (user_id)
+                    'Sorry for inconvenience.' % (info["user_id"])
             else:
                 def done_callback(fut):
                     nonlocal text2
@@ -106,7 +123,7 @@ async def delete_nsfw_and_clone_it_to_thread(
                     await task
         await web_client.chat_postMessage(  # noqa
             **{
-                'channel': channel,
+                'channel': info["channel"],
                 'thread_ts': msg.data['ts'],
                 'text': text if text else 'shares file',
                 'username': user['profile']['display_name'],
@@ -118,7 +135,7 @@ async def delete_nsfw_and_clone_it_to_thread(
         if files and text2:
             await web_client.chat_postMessage(  # noqa
                 **{
-                    'channel': channel,
+                    'channel': info["channel"],
                     'thread_ts': msg.data['ts'],
                     'text': text2,
                     'as_user': True,
@@ -135,6 +152,7 @@ async def message(**payload):
     channel_id = data['channel']
     subtype = data.get('subtype')
 
+    # do nothing on thread
     if data.get('thread_ts'):
         return
 
@@ -147,7 +165,7 @@ async def message(**payload):
         attachments = data['message']['attachments']
         is_nsfw = False
         async with httpx.AsyncClient(headers={
-            'apikey': '55ac3e80-110a-11ea-a7d5-6d78e49dec78'
+            'apikey': os.getenv("VISION_API_KEY")
         }) as requests:
             for att in attachments:
                 url = att.get('thumb_url') or att.get('image_url')
@@ -164,10 +182,18 @@ async def message(**payload):
                         break
         if is_nsfw:
             web_client = payload["web_client"]
-            user_id = data['message']['user']
-            text = data['previous_message']['text']
+            access_token = get_access_token(data['message']["team"])
+            info = {
+                "channel": channel_id,
+                "access_token": access_token,
+                "user_id": data['message']['user']
+            }
+            payload_ = {
+                "ts": ts,
+                "text": data['previous_message']['text'],
+            }
             await delete_nsfw_and_clone_it_to_thread(
-                web_client, channel_id, user_id, text, ts)
+                web_client, info, payload_)
     elif subtype == 'bot_message':
         pass
     elif subtype is None:  # not bot
@@ -182,12 +208,13 @@ async def message(**payload):
                     teamdata[data.get("channel")] = channeldata = {}
             channeldata[data['ts']] = 'foo'
 
+        access_token = get_access_token(data["team"])
         is_nsfw = False
         files = {}
-        async with httpx.AsyncClient(headers={
+        async with httpx.Client(headers={
             'Authorization': 'Bearer %s' % (access_token)
-        }) as requests, httpx.AsyncClient(headers={
-            'apikey': '55ac3e80-110a-11ea-a7d5-6d78e49dec78'
+        }) as requests, httpx.Client(headers={
+            'apikey': os.getenv("VISION_APIKEY")
         }) as requests2:
             for fileinfo in is_file_message(data):
                 url = fileinfo[2]
@@ -199,7 +226,6 @@ async def message(**payload):
                         'file': filebytes
                     }
                 )
-                # print(check_resp.json())
                 files[fileinfo[-1]] = (*fileinfo, filebytes)
                 is_nsfw = True
                 if check_resp.status_code == 200:
@@ -208,17 +234,18 @@ async def message(**payload):
                         is_nsfw = True
         if is_nsfw:
             web_client = payload["web_client"]
-            user_id = data['user']
-            ts = data['ts']
-            text = data['text']
+            info = {
+                "channel": channel_id,
+                "access_token": access_token,
+                "user_id": data['user']
+            }
+            payload_ = {
+                "ts": data['ts'],
+                "text": data['text'],
+                "files": files
+            }
             await delete_nsfw_and_clone_it_to_thread(
-                web_client,
-                channel_id,
-                user_id,
-                text,
-                ts,
-                files=files
-            )
+                web_client, info, payload_)
 
 
 if __name__ == "__main__":

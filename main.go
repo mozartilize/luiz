@@ -92,7 +92,7 @@ func login(c echo.Context) error {
 	sess.Values["slack:redirect_uri"] = params.Get("redirect_uri")
 	sess.Save(c.Request(), c.Response())
 	c.Response().Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
-	return c.Redirect(http.StatusMovedPermanently, baseURL.String())
+	return c.Redirect(http.StatusFound, baseURL.String())
 }
 
 func auth(c echo.Context) error {
@@ -137,8 +137,6 @@ func auth(c echo.Context) error {
 			var data map[string]interface{}
 			json.Unmarshal(body, &data)
 			if data["ok"] == true {
-				fmt.Println(data["access_token"])
-				fmt.Println(data["team_id"])
 				db, _ = getPostgreDB()
 				sql := sq.Insert("tokens").
 					Columns("team_id", "access_token").
@@ -146,6 +144,15 @@ func auth(c echo.Context) error {
 				if _, err := sql.RunWith(db).PlaceholderFormat(sq.Dollar).Exec(); err != nil {
 					log.Info(sql.ToSql())
 					log.Error(err)
+					params := url.Values{
+						"client_id":     []string{os.Getenv("SLACK_CLIENT_ID")},
+						"client_secret": []string{os.Getenv("SLACK_CLIENT_SECRET")},
+						"token":         []string{data["access_token"].(string)},
+					}
+					baseURL, _ := url.Parse("https://slack.com/api/apps.uninstall")
+					baseURL.RawQuery = params.Encode()
+					// access token saving fail so app will be uninstalled
+					http.Get(baseURL.String())
 					return c.String(http.StatusInternalServerError, err.Error())
 				}
 			} else {

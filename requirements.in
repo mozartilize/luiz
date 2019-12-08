@@ -1,7 +1,9 @@
 slackclient[optional]>=2.0.0
 certifi
-sanic
 apscheduler
 httpx
-google-cloud-vision
 aiofiles
+python-dotenv
+sqlalchemy
+psycopg2-binary
+uvloop
