@@ -2,7 +2,10 @@ import os
 import logging
 import asyncio
 import io  # noqa
+import signal
 import ssl as ssl_lib
+import time
+import concurrent
 
 import certifi
 import slack
@@ -45,10 +48,10 @@ async def get_userinfo(web_client, user_id):
 
 
 def is_attachment_message(data):
-    for blk in data['blocks']:
-        for el in blk['elements']:
-            for subel in el['elements']:
-                if subel['type'] == 'link':
+    for blk in data.get('blocks', []):
+        for el in blk.get('elements', []):
+            for subel in el.get('elements', []):
+                if subel.get('type') == 'link':
                     yield subel['url']
 
 
@@ -248,17 +251,43 @@ async def message(**payload):
                 web_client, info, payload_)
 
 
+async def inf_loop():
+    logger = logging.getLogger()
+    while 1:
+        try:
+            logger.info("Ping Pong! I'm alive")
+            await asyncio.sleep(900)
+        except asyncio.CancelledError:
+            break
+
 if __name__ == "__main__":
     import uvloop
     uvloop.install()
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
     logger.addHandler(logging.StreamHandler())
-    ssl_context = ssl_lib.create_default_context(cafile=certifi.where())
-    slack_token = os.environ["SLACK_BOT_TOKEN"]
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
+    slack_token = os.environ["SLACK_BOT_TOKEN"]
+    ssl_context = ssl_lib.create_default_context(cafile=certifi.where())
     rtm_client = slack.RTMClient(
         token=slack_token, ssl=ssl_context, run_async=True, loop=loop
     )
-    loop.run_until_complete(rtm_client.start())
+
+    tasks = asyncio.gather(rtm_client.start(), inf_loop())
+
+    def callback(signum, frame):
+        tasks.cancel()
+        logger.warning("Cancelling tasks...")
+
+    # loop.add_signal_handler(signal.SIGINT, callback)
+    signal.signal(signal.SIGINT, callback)
+    signal.signal(signal.SIGTERM, callback)
+    try:
+        loop.run_until_complete(tasks)
+    except asyncio.CancelledError as e:
+        logger.error(e)
+    finally:
+        logger.info("Quitting... Bye!")
+        loop.close()
