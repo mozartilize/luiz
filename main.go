@@ -50,7 +50,7 @@ func main() {
 		log.Warn("Error loading .env file: " + err.Error())
 	}
 	e := echo.New()
-	cookieStore := sessions.NewCookieStore([]byte("secret"))
+	cookieStore := sessions.NewCookieStore([]byte(os.Getenv("SECRET_KEY") + "secret"))
 	cookieStore.Options = &sessions.Options{
 		Path:     "/",
 		MaxAge:   10 * 60, // 10mins because the code from response lasts 10mins

@@ -4,8 +4,6 @@ import asyncio
 import io  # noqa
 import signal
 import ssl as ssl_lib
-import time
-import concurrent
 
 import certifi
 import slack
