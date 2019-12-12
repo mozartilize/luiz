@@ -116,7 +116,7 @@ async def delete_nsfw_and_clone_it_to_thread(web_client, info, payload):
                         resp = await web_client.files_upload(
                             filename=fileinfo[-3],
                             title=fileinfo[-3],
-                            file=fileinfo[-1].read(),
+                            file=fileinfo[-1],
                         )
                         return resp
                     task = asyncio.create_task(do_upload(fileinfo))
@@ -227,7 +227,7 @@ async def message(**payload):
                         'file': filebytes
                     }
                 )
-                files[fileinfo[-1]] = (*fileinfo, filebytes)
+                files[fileinfo[-1]] = (*fileinfo, resp.content)
                 if check_resp.status_code == 200:
                     result = check_resp.json()['result']
                     if result['value'] >= 0.35:
