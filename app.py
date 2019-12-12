@@ -163,7 +163,7 @@ async def message(**payload):
             attachment_message[data['message']['team']][channel_id][ts]
         except KeyError:
             return
-        attachments = data['message']['attachments']
+        attachments = data['message'].get('attachments', [])
         is_nsfw = False
         async with httpx.Client(headers={
             'apikey': os.getenv("VISION_APIKEY")
