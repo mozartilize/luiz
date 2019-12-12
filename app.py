@@ -228,7 +228,6 @@ async def message(**payload):
                     }
                 )
                 files[fileinfo[-1]] = (*fileinfo, filebytes)
-                is_nsfw = True
                 if check_resp.status_code == 200:
                     result = check_resp.json()['result']
                     if result['value'] >= 0.35:
@@ -279,7 +278,6 @@ if __name__ == "__main__":
         tasks.cancel()
         logger.warning("Cancelling tasks...")
 
-    # loop.add_signal_handler(signal.SIGINT, callback)
     signal.signal(signal.SIGINT, callback)
     signal.signal(signal.SIGTERM, callback)
     try:
