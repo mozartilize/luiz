@@ -4,6 +4,7 @@ import asyncio
 import io  # noqa
 import signal
 import ssl as ssl_lib
+from functools import namedtuple
 
 import certifi
 import slack
@@ -18,10 +19,14 @@ except ImportError:
 else:
     load_dotenv()
 
+# TODO: use redis or setup crontask to clean these memory storages
 attachment_message = {}
 
 users_info = {}
 
+
+FileInfo = namedtuple('FileInfo',
+                      'type id name permalink url_private size content')
 
 db = create_engine(os.environ["DATABASE_URL"], pool_recycle=600)
 
@@ -56,16 +61,17 @@ def is_attachment_message(data):
 def is_file_message(data):
     for filedata in data.get('files', []):
         info = (
+            filedata['id'],
+            filedata['name'],
             filedata['permalink'],
             filedata['url_private'],
             filedata['size'],
-            filedata['name'],
-            filedata['id']
+            None,  # content
         )
         if 'image/' in filedata['mimetype']:
-            yield ('image', *info)
+            yield FileInfo('image', *info)
         elif 'video/' in filedata['mimetype']:
-            yield ('video', *info)
+            yield FileInfo('video', *info)
     yield from ()  # return empty generator if not match any
 
 
@@ -88,11 +94,11 @@ async def delete_nsfw_and_clone_it_to_thread(web_client, info, payload):
         text = payload["text"]
         text2 = ''
         if files:
-            if any(finfo[3] > 15 * 1024 * 1024 for finfo in files.values()):
+            if any(finfo.size > 15 * 1024 * 1024 for finfo in files.values()):
                 for finfo in files.values():
                     if text != '':
                         text += '\n'
-                    text += '<%s|%s>' % (finfo[1], finfo[-3])
+                    text += '<%s|%s>' % (finfo.permalink, finfo.name)
                 if text != '':
                     text += '\n'
                 text += '\n<@%s> Please copy and paste the link(s) above to ' \
@@ -108,17 +114,18 @@ async def delete_nsfw_and_clone_it_to_thread(web_client, info, payload):
                         result['file']['permalink'],
                         result['file']['name']
                     )
-                for fileid, fileinfo in files.items():
-                    await requests.post('https://slack.com/api/files.delete',
-                                        data=dict(file=fileid))
 
-                    async def do_upload(fileinfo):
-                        resp = await web_client.files_upload(
-                            filename=fileinfo[-3],
-                            title=fileinfo[-3],
-                            file=fileinfo[-1],
-                        )
-                        return resp
+                async def do_upload(fileinfo):
+                    resp = await web_client.files_upload(
+                        filename=fileinfo.name,
+                        title=fileinfo.name,
+                        file=fileinfo.content,
+                    )
+                    return resp
+                for fileid, fileinfo in files.items():
+                    # delete old files, maintain storage
+                    await requests.post('https://slack.com/api/files.delete',
+                                        data={'file': fileid})
                     task = asyncio.create_task(do_upload(fileinfo))
                     task.add_done_callback(done_callback)
                     await task
@@ -218,16 +225,15 @@ async def message(**payload):
             'apikey': os.getenv("VISION_APIKEY")
         }) as requests2:
             for fileinfo in is_file_message(data):
-                url = fileinfo[2]
-                resp = await requests.get(url)
-                filebytes = io.BytesIO(resp.content)
+                resp = await requests.get(fileinfo.url_private)
                 check_resp = await requests2.post(
                     'https://api.uploadfilter.io/v1/nudity',
                     files={
-                        'file': filebytes
+                        'file': io.BytesIO(resp.content)
                     }
                 )
-                files[fileinfo[-1]] = (*fileinfo, resp.content)
+                files[fileinfo.id] = FileInfo(
+                    *tuple(fileinfo)[:-1], resp.content)
                 if check_resp.status_code == 200:
                     result = check_resp.json()['result']
                     if result['value'] >= 0.35:
